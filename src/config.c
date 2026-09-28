@@ -1,3 +1,4 @@
+#include "linksaver/linksaver.h"
 #include "config.h"
 #include "types.h"
 #include <stdio.h>
@@ -277,6 +278,8 @@ static int GetIniSection(const char *s) {
     return 4;
   if (StringEqualsNoCase(s, "[GamepadMap]"))
     return 5;
+  if (StringEqualsNoCase(s, "[Linksaver]"))
+    return 6;
   return -1;
 }
 
@@ -446,6 +449,8 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
       g_config.language = value;
       return true;
     }
+  } else if (section == 6) {
+    return Linksaver_ParseConfigKey(key, value);
   } else if (section == 4) {
     if (StringEqualsNoCase(key, "ItemSwitchLR")) {
       return ParseBoolBit(value, &g_config.features0, kFeatures0_SwitchLR);

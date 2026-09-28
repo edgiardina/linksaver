@@ -1,3 +1,4 @@
+#include "linksaver/linksaver.h"
 #include "overworld.h"
 #include "hud.h"
 #include "load_gfx.h"
@@ -3215,6 +3216,8 @@ void Overworld_GetPitDestination() {  // 9bb860
 }
 
 void Overworld_UseEntrance() {  // 9bbbf4
+  if (Linksaver_BlockEntrances())
+    return;
   uint16 xc = link_x_coord >> 3, yc = link_y_coord + 7;
   uint16 pos = ((yc - overworld_offset_base_y) & overworld_offset_mask_y) * 8 +
     ((xc - overworld_offset_base_x) & overworld_offset_mask_x);

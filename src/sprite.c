@@ -1,3 +1,4 @@
+#include "linksaver/linksaver.h"
 #include "sprite.h"
 #include "dungeon.h"
 #include "hud.h"
@@ -3621,6 +3622,8 @@ void Sprite_DisableAll() {  // 89c22f
 }
 
 void Dungeon_LoadSprites() {  // 89c290
+  if (Linksaver_SuppressSprites())
+    return;
   const uint8 *src = kDungeonSprites + kDungeonSpriteOffs[dungeon_room_index2];
   byte_7E0FB1 = dungeon_room_index2 >> 3 & 0xfe;
   byte_7E0FB0 = (dungeon_room_index2 & 0xf) << 1;
@@ -3799,7 +3802,7 @@ void Sprite_Overworld_ProximityMotivatedLoad(uint16 x, uint16 y) {  // 89c6f5
 void Overworld_LoadProximaSpriteIfAlive(uint16 blk) {  // 89c739
   uint8 *p5 = sprite_where_in_overworld + blk;
   uint8 sprite_to_spawn = *p5;
-  if (!sprite_to_spawn)
+  if (!sprite_to_spawn || Linksaver_SuppressSprites())
     return;
 
   uint8 loadedmask = (0x80 >> (blk & 7));

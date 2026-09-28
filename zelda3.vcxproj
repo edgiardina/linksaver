@@ -234,6 +234,9 @@
     <ClCompile Include="src\hud.c" />
     <ClCompile Include="src\load_gfx.c" />
     <ClCompile Include="src\main.c" />
+    <ClCompile Include="src\linksaver\autopilot.c" />
+    <ClCompile Include="src\linksaver\linksaver.c" />
+    <ClCompile Include="src\linksaver\screensaver.c" />
     <ClCompile Include="src\messaging.c" />
     <ClCompile Include="src\misc.c" />
     <ClCompile Include="src\audio.c" />
@@ -453,6 +456,8 @@
     <ClInclude Include="src\load_gfx.h" />
     <ClInclude Include="src\messaging.h" />
     <ClInclude Include="src\misc.h" />
+    <ClInclude Include="src\linksaver\linksaver.h" />
+    <ClInclude Include="src\linksaver\screensaver.h" />
     <ClInclude Include="src\audio.h" />
     <ClInclude Include="src\nmi.h" />
     <ClInclude Include="src\overlord.h" />

@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <time.h>
 #include <SDL.h>
 #ifdef _WIN32
 #include "platform/win32/volume_control.h"
@@ -26,6 +27,8 @@
 #include "load_gfx.h"
 #include "util.h"
 #include "audio.h"
+#include "linksaver/linksaver.h"
+#include "tile_detect.h"
 
 static bool g_run_without_emu = 0;
 
@@ -42,6 +45,8 @@ static void OpenOneGamepad(int i);
 static void HandleVolumeAdjustment(int volume_adjustment);
 static void LoadAssets();
 static void SwitchDirectory();
+static int RunLinksaverHeadless(int frames, int shot_every);
+static void FitViewToDisplay();
 
 enum {
   kDefaultFullscreen = 0,
@@ -166,6 +171,8 @@ static void DrawPpuFrameWithPerf() {
   } else {
     ZeldaDrawPpuFrame(pixel_buffer, pitch, g_ppu_render_flags);
   }
+  Linksaver_DrawDebugOverlay(pixel_buffer, pitch, g_snes_width * render_scale,
+                             g_snes_height * render_scale, render_scale);
   if (g_display_perf)
     RenderNumber(pixel_buffer + pitch * render_scale, pitch, g_curr_fps, render_scale == 4);
   g_renderer_funcs.EndDraw();
@@ -279,6 +286,28 @@ void OpenGLRenderer_Create(struct RendererFuncs *funcs, bool use_opengl_es);
 #undef main
 int main(int argc, char** argv) {
   argc--, argv++;
+  int scr_args_used = Screensaver_ParseArgs(argc, argv);
+  argc -= scr_args_used, argv += scr_args_used;
+  bool linksaver = g_scr_mode != kScrMode_None;
+  if (linksaver)
+    Screensaver_ChdirToExe();
+  if (g_scr_mode == kScrMode_Configure) {
+    Screensaver_ShowConfigure();
+    return 0;
+  }
+  // --linksaver-test <frames> <screenshot interval>: run the autopilot with no
+  // window as fast as possible, logging events and saving debug screenshots.
+  int headless_frames = 0, headless_shot_every = 0, headless_chapter = 0;
+  if (argc >= 3 && strcmp(argv[0], "--linksaver-test") == 0) {
+    headless_frames = atoi(argv[1]);
+    headless_shot_every = atoi(argv[2]);
+    argc -= 3, argv += 3;
+    // Optional: force a single start chapter
+    if (argc >= 1 && atoi(argv[0]) > 0) {
+      headless_chapter = atoi(argv[0]);
+      argc--, argv++;
+    }
+  }
   const char *config_file = NULL;
   if (argc >= 2 && strcmp(argv[0], "--config") == 0) {
     config_file = argv[1];
@@ -287,6 +316,24 @@ int main(int argc, char** argv) {
     SwitchDirectory();
   }
   ParseConfigFile(config_file);
+  if (headless_chapter) {
+    g_linksaver_config.start_saves[0] = headless_chapter;
+    g_linksaver_config.num_start_saves = 1;
+  }
+  if (linksaver) {
+    g_config.autosave = false;
+    g_config.enable_audio = g_linksaver_config.enable_audio && g_scr_mode != kScrMode_Preview;
+    if (g_scr_mode == kScrMode_Fullscreen)
+      g_config.fullscreen = 1;
+    if (g_scr_mode == kScrMode_Preview) {
+      // The preview is a foreign child window; keep to the plain SDL renderer.
+      g_config.fullscreen = 0;
+      g_config.output_method = kOutputMethod_SDL;
+      g_config.window_width = g_config.window_height = 0;
+    }
+  }
+  if ((linksaver || headless_frames) && g_linksaver_config.widescreen)
+    FitViewToDisplay();
   LoadAssets();
   LoadLinkGraphics();
 
@@ -303,6 +350,8 @@ int main(int argc, char** argv) {
                        g_config.enhanced_mode7 * kPpuRenderFlags_4x4Mode7 |
                        g_config.extend_y * kPpuRenderFlags_Height240 |
                        g_config.no_sprite_limits * kPpuRenderFlags_NoSpriteLimits;
+  if (headless_frames)
+    return RunLinksaverHeadless(headless_frames, headless_shot_every);
   ZeldaEnableMsu(g_config.enable_msu);
   ZeldaSetLanguage(g_config.language);
 
@@ -344,7 +393,18 @@ int main(int argc, char** argv) {
     g_renderer_funcs = kSdlRendererFuncs;
   }
 
-  SDL_Window* window = SDL_CreateWindow(kWindowTitle, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, window_width, window_height, g_win_flags);
+  if (g_scr_mode == kScrMode_Fullscreen) {
+    SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0");
+    Screensaver_BlankOtherDisplays(0);
+    g_cursor = false;
+    SDL_ShowCursor(SDL_DISABLE);
+  }
+
+  SDL_Window* window;
+  if (g_scr_mode == kScrMode_Preview)
+    window = (SDL_Window *)Screensaver_CreatePreviewWindow(g_win_flags);
+  else
+    window = SDL_CreateWindow(kWindowTitle, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, window_width, window_height, g_win_flags);
   if(window == NULL) {
     printf("Failed to create window: %s\n", SDL_GetError());
     return 1;
@@ -400,8 +460,15 @@ int main(int argc, char** argv) {
   if (g_config.autosave)
     HandleCommand(kKeys_Load + 0, true);
 
+  if (linksaver)
+    Linksaver_Start((uint32)SDL_GetPerformanceCounter());
+
   while(running) {
+    if (g_scr_mode == kScrMode_Preview && !Screensaver_PreviewParentAlive())
+      running = false;
     while(SDL_PollEvent(&event)) {
+      if (Screensaver_ShouldExitOnEvent(&event))
+        running = false;
       switch(event.type) {
       case SDL_CONTROLLERDEVICEADDED:
         OpenOneGamepad(event.cdevice.which);
@@ -456,6 +523,8 @@ int main(int argc, char** argv) {
     if (g_input1_state & 0xf0)
       g_gamepad_buttons = 0;
     inputs |= g_gamepad_buttons;
+    if (g_linksaver_active)
+      inputs = Linksaver_RunFrame();
 
     SDL_LockMutex(g_audio_mutex);
     bool is_replay = ZeldaRunFrame(inputs);
@@ -510,6 +579,7 @@ int main(int argc, char** argv) {
   g_renderer_funcs.Destroy();
 
   SDL_DestroyWindow(window);
+  Screensaver_DestroyBlankWindows();
   SDL_Quit();
   //SaveConfigFile();
   return 0;
@@ -791,6 +861,97 @@ static bool ParseLinkGraphics(uint8 *file, size_t length) {
   if (palette_length >= 124)
     memcpy(kGlovesColor, file + palette_offs + 120, 4);
   return true;
+}
+
+// Widens the game view to match the monitor's shape, as far as the engine
+// allows: up to kPpuExtraLeftRight extra pixels each side, and 240 lines.
+static void FitViewToDisplay() {
+  SDL_DisplayMode dm;
+  if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0 || SDL_GetDesktopDisplayMode(0, &dm) != 0 || dm.h <= 0)
+    return;
+  int extra = (240 * dm.w / dm.h - 256) / 2;
+  g_config.extend_y = true;
+  g_config.extended_aspect_ratio = IntMax(0, IntMin(extra, kPpuExtraLeftRight));
+  if (g_config.extended_aspect_ratio)
+    g_config.features0 |= kFeatures0_ExtendScreen64 | kFeatures0_WidescreenVisualFixes;
+}
+
+static int RunLinksaverHeadless(int frames, int shot_every) {
+  setvbuf(stdout, NULL, _IONBF, 0);
+  // The save/load path takes the audio lock even with no audio device.
+  g_audio_mutex = SDL_CreateMutex();
+  g_autopilot_verbose = getenv("LINKSAVER_TRACE") ? 2 : 1;
+  g_autopilot_allow_hazard_jumps = getenv("LINKSAVER_ALLOW_WATER_JUMPS") != NULL;
+  g_linksaver_config.show_debug = true;
+  g_ppu_render_flags &= ~kPpuRenderFlags_4x4Mode7;
+  ZeldaEnableMsu(false);
+  ZeldaSetLanguage(g_config.language);
+#if defined(_WIN32)
+  _mkdir("linksaver_test");
+#else
+  mkdir("linksaver_test", 0755);
+#endif
+  Linksaver_Start((uint32)time(NULL));
+  // LINKSAVER_PROBE=x,y,buttons:frames[,buttons:frames...] (buttons in hex):
+  // place Link (x=0 keeps his position) and play the input sequence, logging
+  // him each frame. For checking movement rules against the engine.
+  const char *probe = getenv("LINKSAVER_PROBE");
+  // LINKSAVER_POKE=addr=val[,addr=val...] (hex): set RAM bytes before probing.
+  const char *poke = getenv("LINKSAVER_POKE");
+  for (int addr, val, used; poke && sscanf(poke, "%x=%x%n", &addr, &val, &used) == 2; poke += used + (poke[used] == ',')) {
+    if (addr >= 0 && addr < 0x20000)
+      g_ram[addr] = val;
+    if (!poke[used])
+      break;
+  }
+  if (probe) {
+    int px, py, n = 0, f = 0;
+    if (sscanf(probe, "%d,%d,%n", &px, &py, &n) == 2 && n > 0) {
+      if (px)
+        link_x_coord = px, link_y_coord = py;
+      const char *seq = probe + n;
+      int pb, pf, used;
+      while (sscanf(seq, "%x:%d%n", &pb, &pf, &used) == 2) {
+       seq += used + (seq[used] == ',');
+       for (int i = 0; i < pf; i++, f++) {
+        ZeldaRunFrame(pb);
+        // Attributes just past each edge of Link's collision box (x+0..15, y+8..23).
+        printf("probe %3d: in=%03x module=%d/%d dw=%02x area=%02x pos=%d,%d handler=%d dir=%d abits=%02x state=%02x hand=%02x pos_mode=%02x 379=%02x incap=%d anc=%d spr=%d up=%02x down=%02x left=%02x right=%02x\n", f,
+               pb, main_module_index, submodule_index, savegame_is_darkworld, overworld_area_index,
+               link_x_coord, link_y_coord, link_player_handler_state, link_direction_facing,
+               bitfield_for_a_button, link_state_bits, link_item_in_hand, link_position_mode, byte_7E0379,
+               link_incapacitated_timer, flag_is_ancilla_to_pick_up, flag_is_sprite_to_pick_up,
+               Overworld_GetTileAttributeAtLocation((link_x_coord + 8) >> 3, link_y_coord + 7),
+               Overworld_GetTileAttributeAtLocation((link_x_coord + 8) >> 3, link_y_coord + 24),
+               Overworld_GetTileAttributeAtLocation((link_x_coord - 1) >> 3, link_y_coord + 16),
+               Overworld_GetTileAttributeAtLocation((link_x_coord + 16) >> 3, link_y_coord + 16));
+       }
+      }
+    }
+    return 0;
+  }
+  // LINKSAVER_PLACE=x,y: move Link somewhere before the autopilot takes over.
+  const char *place = getenv("LINKSAVER_PLACE");
+  int place_x, place_y;
+  if (place && sscanf(place, "%d,%d", &place_x, &place_y) == 2)
+    link_x_coord = place_x, link_y_coord = place_y;
+  int pitch = g_snes_width * 4;
+  uint8 *pixels = calloc(pitch, g_snes_height);
+  for (int f = 1; f <= frames; f++) {
+    ZeldaRunFrame(Linksaver_RunFrame());
+    ZeldaDiscardUnusedAudioFrames();
+    if (shot_every && f % shot_every == 0) {
+      ZeldaDrawPpuFrame(pixels, pitch, g_ppu_render_flags);
+      Linksaver_DrawDebugOverlay(pixels, pitch, g_snes_width, g_snes_height, 1);
+      SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormatFrom(pixels, g_snes_width, g_snes_height, 32, pitch, SDL_PIXELFORMAT_ARGB8888);
+      char name[64];
+      snprintf(name, sizeof(name), "linksaver_test/f%07d.bmp", f);
+      SDL_SaveBMP(surf, name);
+      SDL_FreeSurface(surf);
+    }
+  }
+  free(pixels);
+  return 0;
 }
 
 static void LoadLinkGraphics() {

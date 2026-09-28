@@ -19,7 +19,9 @@
 /zelda3
 __pycache__
 /src/*.o
+/src/linksaver/*.o
 /*.exe
+/*.scr
 /*.out
 /snes/*.o
 /msu/
@@ -31,3 +33,8 @@ __pycache__
 /sprites-gfx
 /glsl-shaders
 /token.txt
+/linksaver_test/
+/run_ch*.log
+/shots_*/
+/linksaver_test.log
+/dist/

@@ -1,3 +1,18 @@
+# Linksaver
+
+A Windows screensaver where Link explores Hyrule on his own, built on
+[zelda3](https://github.com/snesrev/zelda3), a C reimplementation of *A Link to the Past*.
+The maps, collision, movement and scrolling are the game's own code; an autopilot
+just presses the controller. See **[LINKSAVER.md](LINKSAVER.md)** for setup,
+settings and how it works.
+
+You need your own copy of the US ROM to extract the game assets. No Nintendo data
+is included in this repository.
+
+The rest of this README is zelda3's original documentation.
+
+---
+
 # Zelda3
 A reimplementation of Zelda 3.
 
