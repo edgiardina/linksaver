@@ -52,7 +52,7 @@ To watch without installing: `linksaver.exe --linksaver` runs it in a window.
 
 The Settings dialog covers:
 
-- **Start points:** which of the game's save points Link can start from
+- **Start points:** where Link starts: Link's House and the Sanctuary (the Light World spawn points from the game's reload menu, after which he walks out the door), outside Eastern Palace, or one of the Dark World save points
 - **Light World:** whether he mirrors over to the Light World
 - **Wide screens:** whether to show more of the world on wide monitors (up to about 448×240 game pixels)
 - **Sound:** music and sound on or off

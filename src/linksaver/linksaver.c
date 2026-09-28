@@ -17,9 +17,9 @@ LinksaverConfig g_linksaver_config = {
   .ambient_life = true,
   .enter_buildings = false,
   .reset_minutes = 20,
-  // Chapters where Link can roam freely (see zelda3.ini for the others).
-  .start_saves = { 2, 5, 6, 7, 9 },
-  .num_start_saves = 5,
+  // Where Link can roam freely (see zelda3.ini for the others).
+  .start_saves = { kStart_LinksHouse, kStart_Sanctuary, 2, 5, 6, 7, 9 },
+  .num_start_saves = 7,
   .show_debug = false,
   .widescreen = true,
   .light_world_percent = 50,
@@ -101,16 +101,20 @@ bool Linksaver_ParseConfigKey(const char *key, char *value) {
     return true;
   } else if (StringEqualsNoCase(key, "StartSaves")) {
     uint8 n = 0;
-    for (char *s = value; *s && n < kLinksaverMaxStartSaves;) {
-      char *end;
-      long v = strtol(s, &end, 10);
-      if (end == s)
-        return false;
-      if (v >= 1 && v <= kNumReferenceSaves)
-        g_linksaver_config.start_saves[n++] = (uint8)v;
-      s = end;
-      while (*s == ',' || *s == ' ')
-        s++;
+    // Chapter numbers, or "house" / "sanctuary" for the Light World spawns.
+    char *item;
+    while ((item = NextDelim(&value, ',')) != NULL && n < kLinksaverMaxStartSaves) {
+      while (*item == ' ')
+        item++;
+      if (StringStartsWithNoCase(item, "house")) {
+        g_linksaver_config.start_saves[n++] = kStart_LinksHouse;
+      } else if (StringStartsWithNoCase(item, "sanctuary")) {
+        g_linksaver_config.start_saves[n++] = kStart_Sanctuary;
+      } else {
+        long v = strtol(item, NULL, 10);
+        if (v >= 1 && v <= kNumReferenceSaves)
+          g_linksaver_config.start_saves[n++] = (uint8)v;
+      }
     }
     if (n == 0)
       return false;
@@ -131,12 +135,24 @@ static void RemoveUnwantedSprites() {
     overlord_type[k] = 0;
 }
 
+// The Light World spawns start from a later save, for a fuller inventory
+// (sword, mirror, flippers), then go through the game's own file load.
+static const uint8 kSpawnBaseChapters[] = { 5, 6, 7, 9 };
+
 static void LoadRandomStart() {
   g_rng = g_rng * 1103515245 + 12345;
-  int chapter = g_linksaver_config.start_saves[(g_rng >> 16) % g_linksaver_config.num_start_saves];
+  int start = g_linksaver_config.start_saves[(g_rng >> 16) % g_linksaver_config.num_start_saves];
+  int spawn_choice = -1;
+  int chapter = start;
+  if (start == kStart_LinksHouse || start == kStart_Sanctuary) {
+    spawn_choice = start == kStart_LinksHouse ? 0 : 1;
+    g_rng = g_rng * 1103515245 + 12345;
+    chapter = kSpawnBaseChapters[(g_rng >> 16) % countof(kSpawnBaseChapters)];
+  }
 
   if (g_autopilot_verbose)
-    printf("--- loading start point: chapter %d\n", chapter);
+    printf("--- loading start point: %s (chapter %d)\n",
+           spawn_choice == 0 ? "Link's House" : spawn_choice == 1 ? "Sanctuary" : "save", chapter);
   ZeldaApuLock();
   SaveLoadSlot(kSaveLoad_Load, 256 + chapter - 1);
   ZeldaApuUnlock();
@@ -146,8 +162,19 @@ static void LoadRandomStart() {
     RemoveUnwantedSprites();
 
   Autopilot_Reset(g_rng ^ 0x9e3779b9);
-  // Only one Light World start point roams well, so balance the worlds by
-  // having some Dark World starts mirror across.
+  if (spawn_choice >= 0) {
+    // Reload the save the way the game does after Agahnim: in the Light
+    // World, from the spawn menu (death_var4 tells the loader to use the
+    // chosen spawn point rather than the last entrance).
+    savegame_is_darkworld = 0;
+    death_var4 = 1;
+    main_module_index = 5;
+    submodule_index = 0;
+    Autopilot_RequestSpawn(spawn_choice);
+    g_frames_since_start = 0;
+    return;
+  }
+  // Balance the worlds by having some Dark World starts mirror across.
   g_rng = g_rng * 1103515245 + 12345;
   if (savegame_is_darkworld && link_item_mirror >= 2 &&
       (int)((g_rng >> 16) % 100) < g_linksaver_config.light_world_percent)

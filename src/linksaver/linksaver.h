@@ -10,6 +10,10 @@
 
 enum {
   kLinksaverMaxStartSaves = 16,
+  // Start points beyond the numbered reference saves: the game's own
+  // Light World spawn points, chosen from its spawn menu.
+  kStart_LinksHouse = 101,
+  kStart_Sanctuary = 102,
 };
 
 typedef struct LinksaverConfig {
@@ -20,7 +24,8 @@ typedef struct LinksaverConfig {
   bool enter_buildings;
   // Reload a random start point after this many minutes (0 = never).
   uint16 reset_minutes;
-  // Reference saves (1-based chapter numbers from saves/ref) to start from.
+  // Reference saves (1-based chapter numbers from saves/ref) or kStart_*
+  // spawn points to start from.
   uint8 start_saves[kLinksaverMaxStartSaves];
   uint8 num_start_saves;
   bool show_debug;
@@ -58,6 +63,9 @@ extern int g_autopilot_verbose;  // 1 = events, 2 = per-second trace
 void Autopilot_Reset(uint32 seed);
 // Makes the autopilot mirror to the Light World from a Dark World start.
 void Autopilot_RequestLightWorld();
+// Answers the game's spawn menu with this choice (0 = Link's House,
+// 1 = Sanctuary), then walks Link out of the building.
+void Autopilot_RequestSpawn(int menu_choice);
 uint16 Autopilot_RunFrame();
 bool Autopilot_WantsReset();
 void Autopilot_DrawDebug(uint8 *pixels, int pitch, int width, int height, int scale, int screen_x, int screen_y);

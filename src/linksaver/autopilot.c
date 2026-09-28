@@ -18,6 +18,7 @@
 enum {
   kBtnB = 1 << 0,
   kBtnY = 1 << 1,
+  kBtnA = 1 << 8,
   kBtnUp = 1 << 4,
   kBtnDown = 1 << 5,
   kBtnLeft = 1 << 6,
@@ -119,6 +120,13 @@ static struct {
 
   // World position of the current goal, so we can re-plan to it after a jump.
   int goal_x, goal_y;
+  // Starting from the game's spawn menu: which option to pick, then walk out.
+  int spawn_choice;     // -1: none
+  int menu_frames;
+  bool leaving_building;
+  int frames_indoors;
+  int best_indoor_y, frames_no_lower;
+
   // Getting to the Light World from a Dark World start, via the Magic Mirror.
   bool want_light_world;
   bool try_mirror;     // at a stop; try the mirror before moving on
@@ -740,6 +748,62 @@ static void RestoreEquippedItem() {
   }
 }
 
+void Autopilot_RequestSpawn(int menu_choice) {
+  ap.spawn_choice = menu_choice;
+  ap.menu_frames = 0;
+  ap.leaving_building = true;
+  ap.frames_indoors = 0;
+  ap.best_indoor_y = -1;
+}
+
+enum {
+  kModule_Underworld = 7,
+  kModule_SpawnSelect = 27,
+  kMenuSettleFrames = 90,
+};
+
+// The spawn menu: wait for it to finish appearing, move the cursor with
+// Down, confirm with A. Presses are separated by releases so each one counts.
+static uint16 AnswerSpawnMenu() {
+  int f = ap.menu_frames++;
+  if (f < kMenuSettleFrames || ap.spawn_choice < 0)
+    return 0;
+  int t = (f - kMenuSettleFrames) % 24;
+  if (t >= 3)
+    return 0;
+  if (choice_in_multiselect_box < ap.spawn_choice)
+    return kBtnDown;
+  if (choice_in_multiselect_box > ap.spawn_choice)
+    return kBtnUp;
+  if (t == 0)
+    LOG("choosing spawn point %d", ap.spawn_choice);
+  return kBtnA;
+}
+
+// After spawning indoors: the doors of Link's House and the Sanctuary are
+// straight below where Link appears, so walk down and let the game's corner
+// nudging line him up with the door. If he stalls, wiggle sideways.
+static uint16 LeaveBuilding() {
+  if (++ap.frames_indoors > 60 * 30 && !ap.want_reset) {
+    LOG("couldn't find the way out of the building");
+    ap.want_reset = true;
+  }
+  if (submodule_index != 0 || !LinkIsSteerable(link_player_handler_state))
+    return 0;
+  if (link_y_coord > ap.best_indoor_y) {
+    ap.best_indoor_y = link_y_coord;
+    ap.frames_no_lower = 0;
+  } else {
+    ap.frames_no_lower++;
+  }
+  if (ap.frames_no_lower > 30) {
+    // Alternate sideways steps until he can go down again.
+    int n = (ap.frames_no_lower - 30) / 16;
+    return kBtnDown | ((n & 1) ? kBtnLeft : kBtnRight);
+  }
+  return kBtnDown;
+}
+
 void Autopilot_RequestLightWorld() {
   ap.want_light_world = true;
 }
@@ -775,6 +839,7 @@ static void StartMirror() {
 void Autopilot_Reset(uint32 seed) {
   memset(&ap, 0, sizeof(ap));
   ap.saved_item = -1;
+  ap.spawn_choice = -1;
   ap.rng = seed ? seed : 0x12345678;
   ap.came_from_side = kSide_None;
   ap.goal_side = kSide_None;
@@ -794,9 +859,21 @@ uint16 Autopilot_RunFrame() {
         link_player_handler_state, ap.phase, ap.wp_pos, ap.wp_count, ap.wp_x[ap.wp_pos], ap.wp_y[ap.wp_pos],
         ap.frames_no_closer);
 
+  if (main_module_index == kModule_SpawnSelect)
+    return AnswerSpawnMenu();
+
   // Text boxes: tap B to advance.
   if (main_module_index == 14)
     return (ap.frame & 8) ? kBtnB : 0;
+
+  if (ap.leaving_building) {
+    if (main_module_index == kModule_Underworld)
+      return LeaveBuilding();
+    if (main_module_index == 9) {
+      LOG("out of the building at %d,%d", link_x_coord, link_y_coord);
+      ap.leaving_building = false;
+    }
+  }
 
   if (main_module_index != 9) {
     // Interiors aren't handled yet; if we end up somewhere odd, start over.

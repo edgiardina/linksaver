@@ -876,6 +876,17 @@ static void FitViewToDisplay() {
     g_config.features0 |= kFeatures0_ExtendScreen64 | kFeatures0_WidescreenVisualFixes;
 }
 
+static void SaveHeadlessScreenshot(const char *name) {
+  int pitch = g_snes_width * 4;
+  uint8 *pixels = calloc(pitch, g_snes_height);
+  ZeldaDrawPpuFrame(pixels, pitch, g_ppu_render_flags);
+  Linksaver_DrawDebugOverlay(pixels, pitch, g_snes_width, g_snes_height, 1);
+  SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormatFrom(pixels, g_snes_width, g_snes_height, 32, pitch, SDL_PIXELFORMAT_ARGB8888);
+  SDL_SaveBMP(surf, name);
+  SDL_FreeSurface(surf);
+  free(pixels);
+}
+
 static int RunLinksaverHeadless(int frames, int shot_every) {
   setvbuf(stdout, NULL, _IONBF, 0);
   // The save/load path takes the audio lock even with no audio device.
@@ -919,8 +930,9 @@ static int RunLinksaverHeadless(int frames, int shot_every) {
        for (int i = 0; i < pf; i++, f++) {
         ZeldaRunFrame(pb);
         // Attributes just past each edge of Link's collision box (x+0..15, y+8..23).
-        printf("probe %3d: in=%03x module=%d/%d dw=%02x area=%02x pos=%d,%d handler=%d dir=%d abits=%02x state=%02x hand=%02x pos_mode=%02x 379=%02x incap=%d anc=%d spr=%d up=%02x down=%02x left=%02x right=%02x\n", f,
-               pb, main_module_index, submodule_index, savegame_is_darkworld, overworld_area_index,
+        printf("probe %3d: in=%03x module=%d/%d room=%03x choice=%d dw=%02x area=%02x pos=%d,%d handler=%d dir=%d abits=%02x state=%02x hand=%02x pos_mode=%02x 379=%02x incap=%d anc=%d spr=%d up=%02x down=%02x left=%02x right=%02x\n", f,
+               pb, main_module_index, submodule_index, dungeon_room_index, choice_in_multiselect_box,
+               savegame_is_darkworld, overworld_area_index,
                link_x_coord, link_y_coord, link_player_handler_state, link_direction_facing,
                bitfield_for_a_button, link_state_bits, link_item_in_hand, link_position_mode, byte_7E0379,
                link_incapacitated_timer, flag_is_ancilla_to_pick_up, flag_is_sprite_to_pick_up,
@@ -931,6 +943,10 @@ static int RunLinksaverHeadless(int frames, int shot_every) {
        }
       }
     }
+    // LINKSAVER_PROBE_SHOT=file.bmp: save the final frame.
+    const char *shot = getenv("LINKSAVER_PROBE_SHOT");
+    if (shot)
+      SaveHeadlessScreenshot(shot);
     return 0;
   }
   // LINKSAVER_PLACE=x,y: move Link somewhere before the autopilot takes over.
@@ -938,22 +954,15 @@ static int RunLinksaverHeadless(int frames, int shot_every) {
   int place_x, place_y;
   if (place && sscanf(place, "%d,%d", &place_x, &place_y) == 2)
     link_x_coord = place_x, link_y_coord = place_y;
-  int pitch = g_snes_width * 4;
-  uint8 *pixels = calloc(pitch, g_snes_height);
   for (int f = 1; f <= frames; f++) {
     ZeldaRunFrame(Linksaver_RunFrame());
     ZeldaDiscardUnusedAudioFrames();
     if (shot_every && f % shot_every == 0) {
-      ZeldaDrawPpuFrame(pixels, pitch, g_ppu_render_flags);
-      Linksaver_DrawDebugOverlay(pixels, pitch, g_snes_width, g_snes_height, 1);
-      SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormatFrom(pixels, g_snes_width, g_snes_height, 32, pitch, SDL_PIXELFORMAT_ARGB8888);
       char name[64];
       snprintf(name, sizeof(name), "linksaver_test/f%07d.bmp", f);
-      SDL_SaveBMP(surf, name);
-      SDL_FreeSurface(surf);
+      SaveHeadlessScreenshot(name);
     }
   }
-  free(pixels);
   return 0;
 }
 

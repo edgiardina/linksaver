@@ -9,10 +9,10 @@
 #include "settings_dialog.h"
 
 enum {
-  kNumChapters = 11,  // reference saves 2..12 start on the overworld
-  kFirstChapter = 2,
+  kNumStarts = 13,
+  kStartsInFirstColumn = 7,
 
-  kId_Chapter0 = 100,
+  kId_Start0 = 100,
   kId_Audio = 200,
   kId_Enemies,
   kId_Widescreen,
@@ -23,21 +23,31 @@ enum {
   kId_Advanced,
 };
 
-// Names for reference saves 2..12. The ones in parentheses start Link
-// somewhere he can't get far from yet.
-static const char *const kChapterNames[kNumChapters] = {
-  "Light World: Eastern Palace",
-  "Desert Palace (boxed in by rocks)",
-  "Death Mountain (limited)",
-  "Dark World: Pyramid",
-  "Dark World: Palace of Darkness",
-  "Dark World: Swamp Palace",
-  "Skull Woods (enclosed)",
-  "Dark World: Village of Outcasts",
-  "Ice Palace island (enclosed)",
-  "Misery Mire (limited)",
-  "Turtle Rock (limited)",
+// Start points as written in StartSaves: the game's Light World spawn points
+// by name, reference saves by chapter number. The ones in parentheses start
+// Link somewhere he can't get far from yet.
+typedef struct StartPoint {
+  const char *token;
+  const char *label;
+} StartPoint;
+
+static const StartPoint kStarts[kNumStarts] = {
+  { "house", "Light World: Link's House" },
+  { "sanctuary", "Light World: Sanctuary" },
+  { "2", "Light World: Eastern Palace" },
+  { "5", "Dark World: Pyramid" },
+  { "6", "Dark World: Palace of Darkness" },
+  { "7", "Dark World: Swamp Palace" },
+  { "9", "Dark World: Village of Outcasts" },
+  { "3", "Desert Palace (boxed in by rocks)" },
+  { "4", "Death Mountain (limited)" },
+  { "8", "Skull Woods (enclosed)" },
+  { "10", "Ice Palace island (enclosed)" },
+  { "11", "Misery Mire (limited)" },
+  { "12", "Turtle Rock (limited)" },
 };
+
+static const char kDefaultStarts[] = "house, sanctuary, 2, 5, 6, 7, 9";
 
 static const char kSection[] = "Linksaver";
 
@@ -81,18 +91,12 @@ static bool GetCheck(int id) {
 }
 
 static void LoadSettings() {
-  char starts[128];
-  GetPrivateProfileStringA(kSection, "StartSaves", "2, 5, 6, 7, 9", starts, sizeof(starts), g_dlg.ini_path);
-  for (char *s = starts; *s;) {
-    char *end;
-    long v = strtol(s, &end, 10);
-    if (end == s) {
-      s++;
-      continue;
-    }
-    if (v >= kFirstChapter && v < kFirstChapter + kNumChapters)
-      SetCheck(kId_Chapter0 + (int)v - kFirstChapter, true);
-    s = end;
+  char starts[160];
+  GetPrivateProfileStringA(kSection, "StartSaves", kDefaultStarts, starts, sizeof(starts), g_dlg.ini_path);
+  for (char *item = strtok(starts, ", "); item; item = strtok(NULL, ", ")) {
+    for (int i = 0; i < kNumStarts; i++)
+      if (_stricmp(item, kStarts[i].token) == 0)
+        SetCheck(kId_Start0 + i, true);
   }
   SetCheck(kId_Audio, ReadBool("Audio", false));
   SetCheck(kId_Enemies, !ReadBool("NoEnemies", true));
@@ -106,12 +110,12 @@ static void LoadSettings() {
 }
 
 static bool SaveSettings() {
-  char starts[128] = "";
-  for (int i = 0; i < kNumChapters; i++) {
-    if (GetCheck(kId_Chapter0 + i)) {
-      char num[8];
-      snprintf(num, sizeof(num), "%s%d", starts[0] ? ", " : "", kFirstChapter + i);
-      strcat(starts, num);
+  char starts[160] = "";
+  for (int i = 0; i < kNumStarts; i++) {
+    if (GetCheck(kId_Start0 + i)) {
+      if (starts[0])
+        strcat(starts, ", ");
+      strcat(starts, kStarts[i].token);
     }
   }
   if (!starts[0]) {
@@ -145,17 +149,18 @@ static void OpenAdvanced() {
 
 static void BuildControls() {
   int y = 12;
-  AddControl("BUTTON", "Start points", BS_GROUPBOX, 12, y, 436, 196, -1);
+  AddControl("BUTTON", "Start points", BS_GROUPBOX, 12, y, 436, 220, -1);
   y += 22;
-  for (int i = 0; i < kNumChapters; i++) {
-    int col = i < 6 ? 0 : 1, row = i < 6 ? i : i - 6;
-    AddControl("BUTTON", kChapterNames[i], BS_AUTOCHECKBOX | WS_TABSTOP,
-               24 + col * 212, y + row * 24, 206, 20, kId_Chapter0 + i);
+  for (int i = 0; i < kNumStarts; i++) {
+    int col = i < kStartsInFirstColumn ? 0 : 1;
+    int row = col ? i - kStartsInFirstColumn : i;
+    AddControl("BUTTON", kStarts[i].label, BS_AUTOCHECKBOX | WS_TABSTOP,
+               24 + col * 212, y + row * 24, 206, 20, kId_Start0 + i);
   }
-  y = 186;
+  y = 210;
   AddControl("STATIC", "Link starts at one of these at random.", SS_LEFT, 24, y - 2, 420, 16, -1);
 
-  y = 220;
+  y = 244;
   AddControl("BUTTON", "Visit the Light World too (Link uses the Magic Mirror)", BS_AUTOCHECKBOX | WS_TABSTOP, 16, y, 420, 20, kId_LightWorld);
   AddControl("BUTTON", "Show more of the world on wide screens", BS_AUTOCHECKBOX | WS_TABSTOP, 16, y + 24, 420, 20, kId_Widescreen);
   AddControl("BUTTON", "Play music and sound", BS_AUTOCHECKBOX | WS_TABSTOP, 16, y + 48, 420, 20, kId_Audio);
@@ -163,12 +168,12 @@ static void BuildControls() {
   AddControl("BUTTON", "Include enemies", BS_AUTOCHECKBOX | WS_TABSTOP, 16, y + 96, 420, 20, kId_Enemies);
   AddControl("BUTTON", "Show the autopilot's collision map and route", BS_AUTOCHECKBOX | WS_TABSTOP, 16, y + 120, 420, 20, kId_Debug);
 
-  y = 374;
+  y = 398;
   AddControl("STATIC", "Move to a new start point every", SS_LEFT, 16, y + 3, 190, 18, -1);
   AddControl("EDIT", "", ES_NUMBER | ES_RIGHT | WS_BORDER | WS_TABSTOP, 206, y, 44, 22, kId_ResetMinutes);
   AddControl("STATIC", "minutes (0 = never)", SS_LEFT, 256, y + 3, 180, 18, -1);
 
-  y = 414;
+  y = 438;
   AddControl("BUTTON", "Advanced...", BS_PUSHBUTTON | WS_TABSTOP, 12, y, 96, 26, kId_Advanced);
   AddControl("BUTTON", "OK", BS_DEFPUSHBUTTON | WS_TABSTOP, 272, y, 84, 26, IDOK);
   AddControl("BUTTON", "Cancel", BS_PUSHBUTTON | WS_TABSTOP, 364, y, 84, 26, IDCANCEL);
@@ -229,7 +234,7 @@ void ShowSettingsDialog(HWND owner, const char *ini_path) {
   RegisterClassA(&wc);
 
   DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP;
-  RECT rc = { 0, 0, Scale(460), Scale(452) };
+  RECT rc = { 0, 0, Scale(460), Scale(476) };
   AdjustWindowRect(&rc, style, FALSE);
   int w = rc.right - rc.left, h = rc.bottom - rc.top;
   RECT work;
