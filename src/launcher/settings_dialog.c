@@ -18,6 +18,7 @@ enum {
   kId_Widescreen,
   kId_Debug,
   kId_LightWorld,
+  kId_AmbientLife,
   kId_ResetMinutes,
   kId_Advanced,
 };
@@ -95,6 +96,7 @@ static void LoadSettings() {
   }
   SetCheck(kId_Audio, ReadBool("Audio", false));
   SetCheck(kId_Enemies, !ReadBool("NoEnemies", true));
+  SetCheck(kId_AmbientLife, ReadBool("AmbientLife", true));
   SetCheck(kId_Widescreen, ReadBool("Widescreen", true));
   SetCheck(kId_Debug, ReadBool("ShowDebug", false));
   SetCheck(kId_LightWorld, GetPrivateProfileIntA(kSection, "LightWorldPercent", 50, g_dlg.ini_path) > 0);
@@ -119,6 +121,7 @@ static bool SaveSettings() {
   WritePrivateProfileStringA(kSection, "StartSaves", starts, g_dlg.ini_path);
   WriteBool("Audio", GetCheck(kId_Audio));
   WriteBool("NoEnemies", !GetCheck(kId_Enemies));
+  WriteBool("AmbientLife", GetCheck(kId_AmbientLife));
   WriteBool("Widescreen", GetCheck(kId_Widescreen));
   WriteBool("ShowDebug", GetCheck(kId_Debug));
   WritePrivateProfileStringA(kSection, "LightWorldPercent", GetCheck(kId_LightWorld) ? "50" : "0", g_dlg.ini_path);
@@ -156,15 +159,16 @@ static void BuildControls() {
   AddControl("BUTTON", "Visit the Light World too (Link uses the Magic Mirror)", BS_AUTOCHECKBOX | WS_TABSTOP, 16, y, 420, 20, kId_LightWorld);
   AddControl("BUTTON", "Show more of the world on wide screens", BS_AUTOCHECKBOX | WS_TABSTOP, 16, y + 24, 420, 20, kId_Widescreen);
   AddControl("BUTTON", "Play music and sound", BS_AUTOCHECKBOX | WS_TABSTOP, 16, y + 48, 420, 20, kId_Audio);
-  AddControl("BUTTON", "Include enemies and other characters", BS_AUTOCHECKBOX | WS_TABSTOP, 16, y + 72, 420, 20, kId_Enemies);
-  AddControl("BUTTON", "Show the autopilot's collision map and route", BS_AUTOCHECKBOX | WS_TABSTOP, 16, y + 96, 420, 20, kId_Debug);
+  AddControl("BUTTON", "Show harmless animals and townsfolk", BS_AUTOCHECKBOX | WS_TABSTOP, 16, y + 72, 420, 20, kId_AmbientLife);
+  AddControl("BUTTON", "Include enemies", BS_AUTOCHECKBOX | WS_TABSTOP, 16, y + 96, 420, 20, kId_Enemies);
+  AddControl("BUTTON", "Show the autopilot's collision map and route", BS_AUTOCHECKBOX | WS_TABSTOP, 16, y + 120, 420, 20, kId_Debug);
 
-  y = 350;
+  y = 374;
   AddControl("STATIC", "Move to a new start point every", SS_LEFT, 16, y + 3, 190, 18, -1);
   AddControl("EDIT", "", ES_NUMBER | ES_RIGHT | WS_BORDER | WS_TABSTOP, 206, y, 44, 22, kId_ResetMinutes);
   AddControl("STATIC", "minutes (0 = never)", SS_LEFT, 256, y + 3, 180, 18, -1);
 
-  y = 390;
+  y = 414;
   AddControl("BUTTON", "Advanced...", BS_PUSHBUTTON | WS_TABSTOP, 12, y, 96, 26, kId_Advanced);
   AddControl("BUTTON", "OK", BS_DEFPUSHBUTTON | WS_TABSTOP, 272, y, 84, 26, IDOK);
   AddControl("BUTTON", "Cancel", BS_PUSHBUTTON | WS_TABSTOP, 364, y, 84, 26, IDCANCEL);
@@ -225,7 +229,7 @@ void ShowSettingsDialog(HWND owner, const char *ini_path) {
   RegisterClassA(&wc);
 
   DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP;
-  RECT rc = { 0, 0, Scale(460), Scale(428) };
+  RECT rc = { 0, 0, Scale(460), Scale(452) };
   AdjustWindowRect(&rc, style, FALSE);
   int w = rc.right - rc.left, h = rc.bottom - rc.top;
   RECT work;

@@ -14,6 +14,7 @@
 LinksaverConfig g_linksaver_config = {
   .enable_audio = false,
   .no_enemies = true,
+  .ambient_life = true,
   .enter_buildings = false,
   .reset_minutes = 20,
   // Chapters where Link can roam freely (see zelda3.ini for the others).
@@ -40,6 +41,41 @@ bool Linksaver_SuppressSprites() {
   return g_linksaver_active && g_linksaver_config.no_enemies;
 }
 
+// Overworld sprites that don't hurt Link, chase him, or start events.
+// Left out on purpose: ravens (swoop at Link), the snitch ladies (call the
+// guards), Kiki the monkey (walks up and asks for rupees).
+static bool IsHarmlessSprite(uint8 type) {
+  switch (type) {
+  case 0x0B:  // cucco
+  case 0x1A:  // smithy
+  case 0x25:  // talking tree
+  case 0x28:  // Dark World hint folk
+  case 0x29:  // villagers
+  case 0x2A:  // sweeping lady
+  case 0x2B:  // hobo
+  case 0x2C:  // lumberjacks
+  case 0x2E:  // flute boy
+  case 0x59:  // Lost Woods bird
+  case 0x5A:  // Lost Woods squirrel
+  case 0x74:  // running man
+  case 0x75:  // bottle vendor
+  case 0x78:  // Sahasrahla's wife
+  case 0x9E:  // Haunted Grove ostrich
+  case 0x9F:  // Haunted Grove rabbit
+  case 0xA0:  // Haunted Grove bird
+  case 0xAD:  // old man
+  case 0xE3:  // fairy
+    return true;
+  }
+  return false;
+}
+
+bool Linksaver_SuppressSpriteType(uint8 type) {
+  if (!Linksaver_SuppressSprites())
+    return false;
+  return !(g_linksaver_config.ambient_life && IsHarmlessSprite(type));
+}
+
 bool Linksaver_BlockEntrances() {
   return g_linksaver_active && !g_linksaver_config.enter_buildings;
 }
@@ -49,6 +85,8 @@ bool Linksaver_ParseConfigKey(const char *key, char *value) {
     return ParseBool(value, &g_linksaver_config.enable_audio);
   } else if (StringEqualsNoCase(key, "NoEnemies")) {
     return ParseBool(value, &g_linksaver_config.no_enemies);
+  } else if (StringEqualsNoCase(key, "AmbientLife")) {
+    return ParseBool(value, &g_linksaver_config.ambient_life);
   } else if (StringEqualsNoCase(key, "EnterBuildings")) {
     return ParseBool(value, &g_linksaver_config.enter_buildings);
   } else if (StringEqualsNoCase(key, "LightWorldPercent")) {
@@ -82,6 +120,17 @@ bool Linksaver_ParseConfigKey(const char *key, char *value) {
   return false;
 }
 
+// The save states come with their own sprites already spawned; keep only
+// the ones we'd have let spawn.
+static void RemoveUnwantedSprites() {
+  for (int k = 0; k < 16; k++) {
+    if (sprite_state[k] && Linksaver_SuppressSpriteType(sprite_type[k]))
+      sprite_state[k] = 0;
+  }
+  for (int k = 0; k < 8; k++)
+    overlord_type[k] = 0;
+}
+
 static void LoadRandomStart() {
   g_rng = g_rng * 1103515245 + 12345;
   int chapter = g_linksaver_config.start_saves[(g_rng >> 16) % g_linksaver_config.num_start_saves];
@@ -94,7 +143,7 @@ static void LoadRandomStart() {
   // Some reference saves resume a recorded replay; we want our own input.
   PatchCommand('l');
   if (g_linksaver_config.no_enemies)
-    Sprite_DisableAll();
+    RemoveUnwantedSprites();
 
   Autopilot_Reset(g_rng ^ 0x9e3779b9);
   // Only one Light World start point roams well, so balance the worlds by

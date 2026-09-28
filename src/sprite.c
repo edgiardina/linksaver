@@ -3802,7 +3802,11 @@ void Sprite_Overworld_ProximityMotivatedLoad(uint16 x, uint16 y) {  // 89c6f5
 void Overworld_LoadProximaSpriteIfAlive(uint16 blk) {  // 89c739
   uint8 *p5 = sprite_where_in_overworld + blk;
   uint8 sprite_to_spawn = *p5;
-  if (!sprite_to_spawn || Linksaver_SuppressSprites())
+  if (!sprite_to_spawn)
+    return;
+  // Values >= 0xf4 are overlords (spawners); the rest are sprite type + 1.
+  if (sprite_to_spawn >= 0xf4 ? Linksaver_SuppressSprites() :
+                                Linksaver_SuppressSpriteType(sprite_to_spawn - 1))
     return;
 
   uint8 loadedmask = (0x80 >> (blk & 7));

@@ -25,6 +25,9 @@ enum {
 };
 
 enum {
+  // Both worlds share coordinates, so learned walls are tagged with this.
+  kDarkWorldTileFlag = 0x8000,
+  kMaxLearnedWalls = 128,
   kMaxTiles = 128,  // A large area is 1024px = 128 tiles of 8px
   kNodeStride = kMaxTiles,
   kNumNodes = kMaxTiles * kMaxTiles,
@@ -38,6 +41,10 @@ enum {
   kMajorSlop = 1,
   kArriveDist = 2,
   kStuckFrames = 45,
+  // Swimming has momentum, so Link can't stop on a pixel.
+  kSwimArriveDist = 8,
+  kSwimCrossSlop = 6,
+  kSwimStuckFrames = 90,
 };
 
 enum {
@@ -87,6 +94,9 @@ static struct {
   uint16 nudge_buttons;  // held during kPhase_Idle to shake loose when stuck
 
   int came_from_side;
+  // How many times Link has entered each 512px screen of the map (Light
+  // World 0-63, Dark World 64-127), so exits favour places he hasn't been.
+  uint8 screen_visits[128];
   int wanders_in_area;
   uint8 failed_sides;  // bitmask of sides that didn't work in this area
 
@@ -97,6 +107,14 @@ static struct {
   int stuck_count;
   int frames_since_progress;
   int frames_off_overworld;
+  int frames_in_area;
+  int trapped_plans;  // consecutive plans that found no way out of a small pocket
+
+  // Tiles Link turned out not to be able to cross even though their
+  // attributes say he can (e.g. something standing there). World tile coords.
+  struct { uint16 tx, ty; } learned_walls[kMaxLearnedWalls];
+  int num_learned_walls, next_learned_wall;
+  int last_stuck_x, last_stuck_y;
   bool want_reset;
 
   // World position of the current goal, so we can re-plan to it after a jump.
@@ -191,15 +209,28 @@ static void BuildGrid(bool water_ok) {
   if (ap.tiles > kMaxTiles)
     ap.tiles = kMaxTiles;
 
-  // While swimming, deep water is passable; Plan() then heads for the shore.
-  ap.swimming = water_ok || link_player_handler_state == kHandler_Swimming;
+  // With the Flippers, deep water is just more ground to cover. Without
+  // them, if Link somehow ends up in water, make it passable so Plan() can
+  // head for the shore.
+  bool in_water = water_ok || link_player_handler_state == kHandler_Swimming;
+  bool can_swim = link_item_flippers != 0;
+  ap.swimming = in_water && !can_swim;
+  bool water_passable = in_water || can_swim;
   int tx0 = ap.ax0 >> 3;
   for (int r = 0; r < ap.tiles; r++) {
     for (int c = 0; c < ap.tiles; c++) {
       uint8 attr = Overworld_GetTileAttributeAtLocation(tx0 + c, ap.ay0 + r * 8);
       ap.tile_attr[r][c] = attr;
-      ap.tile_ok[r][c] = TileAttrWalkable(attr) || (ap.swimming && (attr == 0x08 || attr == 0x0b));
+      ap.tile_ok[r][c] = TileAttrWalkable(attr) || (water_passable && (attr == 0x08 || attr == 0x0b));
     }
+  }
+  int world_flag = savegame_is_darkworld ? kDarkWorldTileFlag : 0;
+  for (int i = 0; i < ap.num_learned_walls; i++) {
+    if ((ap.learned_walls[i].tx & kDarkWorldTileFlag) != world_flag)
+      continue;
+    int c = (ap.learned_walls[i].tx & ~kDarkWorldTileFlag) - tx0, r = ap.learned_walls[i].ty - (ap.ay0 >> 3);
+    if (c >= 0 && r >= 0 && c < ap.tiles && r < ap.tiles)
+      ap.tile_ok[r][c] = false;
   }
   if (g_autopilot_verbose) {
     // Dump the raw attributes once per area so collision can be inspected offline.
@@ -295,7 +326,18 @@ static int JumpLanding(int x, int y, int side) {
 // Breadth-first search over 8-connected nodes. Link moves at the same speed
 // per axis when walking diagonally, so a diagonal step costs the same as a
 // straight one. Diagonals require both orthogonal neighbours to be clear.
-static void RunBfs(int start) {
+// Nodes this close to the area edge are off limits for wandering (but not
+// for exits): stepping along the edge can carry Link into the next area.
+enum { kEdgeMargin = 3 };
+
+static bool NearEdge(int x, int y) {
+  return x < kEdgeMargin || y < kEdgeMargin ||
+         x >= NodesWide() - kEdgeMargin || y >= NodesHigh() - kEdgeMargin;
+}
+
+// |avoid_edges|: only allow edge-band nodes in the first few steps, so Link
+// can get away from the edge he arrived at but otherwise stays clear of it.
+static void RunBfs(int start, bool avoid_edges) {
   static const int8 kDx[8] = { 0, 0, -1, 1, -1, 1, -1, 1 };
   static const int8 kDy[8] = { -1, 1, 0, 0, -1, -1, 1, 1 };
   int w = NodesWide(), h = NodesHigh();
@@ -314,6 +356,8 @@ static void RunBfs(int start) {
         continue;
       int m = NodeIndex(nx, ny);
       if (!ap.node_ok[m] || ap.dist[m] >= 0)
+        continue;
+      if (avoid_edges && ap.dist[n] >= kEdgeMargin && NearEdge(nx, ny))
         continue;
       if (d >= 4 && (!ap.node_ok[NodeIndex(nx, y)] || !ap.node_ok[NodeIndex(x, ny)]))
         continue;
@@ -432,6 +476,13 @@ static int PickExitNode(int side) {
   return NodeIndex(cx, cy);
 }
 
+// A node where Link would stand on dry land (not swimming).
+static bool NodeOnLand(int n) {
+  int x = n % kNodeStride, y = n / kNodeStride;
+  return TileAttrWalkable(ap.tile_attr[y + 1][x]) && TileAttrWalkable(ap.tile_attr[y + 1][x + 1]) &&
+         TileAttrWalkable(ap.tile_attr[y + 2][x]) && TileAttrWalkable(ap.tile_attr[y + 2][x + 1]);
+}
+
 static int PickWanderNode(int start) {
   int max_dist = 0;
   for (int i = 0; i < kNumNodes; i++)
@@ -440,18 +491,23 @@ static int PickWanderNode(int start) {
   if (max_dist < 4)
     return -1;
   // Prefer somewhere in the far half of what's reachable.
+  // Wander goals are always on land, even when he can swim there.
   int min_dist = max_dist / 2;
   int count = 0;
   for (int i = 0; i < kNumNodes; i++)
-    if (ap.dist[i] >= min_dist)
+    if (ap.dist[i] >= min_dist && NodeOnLand(i))
       count++;
+  if (count == 0)
+    return -1;
   int pick = RandRange(0, count - 1);
   for (int i = 0; i < kNumNodes; i++) {
-    if (ap.dist[i] >= min_dist && pick-- == 0)
+    if (ap.dist[i] >= min_dist && NodeOnLand(i) && pick-- == 0)
       return i;
   }
   return -1;
 }
+
+static int ScreenAt(int x, int y);
 
 static void Plan(bool keep_goal) {
   BuildGrid(false);
@@ -469,7 +525,7 @@ static void Plan(bool keep_goal) {
     ap.stuck_count++;
     return;
   }
-  RunBfs(start);
+  RunBfs(start, false);
 
   // Decide between leaving the area and wandering inside it. Wander a
   // couple of times per area, then move on.
@@ -490,39 +546,68 @@ static void Plan(bool keep_goal) {
     // in the queue is the closest.
     for (int i = 0; i < ap.queue_len && goal < 0; i++) {
       int n = ap.queue[i];
-      int x = n % kNodeStride, y = n / kNodeStride;
-      if (TileAttrWalkable(ap.tile_attr[y + 1][x]) && TileAttrWalkable(ap.tile_attr[y + 1][x + 1]) &&
-          TileAttrWalkable(ap.tile_attr[y + 2][x]) && TileAttrWalkable(ap.tile_attr[y + 2][x + 1]))
+      if (NodeOnLand(n))
         goal = n;
     }
     LOG("swimming at %d,%d, heading for shore", link_x_coord, link_y_coord);
   }
-  // No shore in this area: swim out through an edge and look again there.
-  bool want_exit = ap.swimming ? goal < 0 : (ap.wanders_in_area >= 2 || RandRange(0, 99) < 45);
+  // Explore a new area at least once before leaving it. (When swimming with
+  // no shore in this area, swim out through an edge and look again there.)
+  bool want_exit = ap.swimming ? goal < 0 :
+      ap.wanders_in_area >= 2 || (ap.wanders_in_area >= 1 && RandRange(0, 99) < 45);
   if (want_exit) {
-    int weights[4], total = 0;
-    for (int s = 0; s < 4; s++) {
-      weights[s] = 0;
-      if (SideLeadsSomewhere(s) && !(ap.failed_sides & (1 << s)))
-        weights[s] = (s == ap.came_from_side) ? 1 : 4;
-      total += weights[s];
+    // Random order over the sides that lead somewhere, and only fall back to
+    // the side we came in through if nothing else has an opening.
+    int order[4], n = 0;
+    for (int s = 0; s < 4; s++)
+      if (s != ap.came_from_side && SideLeadsSomewhere(s) && !(ap.failed_sides & (1 << s)))
+        order[n++] = s;
+    for (int i = n - 1; i > 0; i--) {
+      int j = RandRange(0, i), t = order[i];
+      order[i] = order[j], order[j] = t;
     }
-    // Try sides in weighted random order until one has an opening.
-    while (total > 0 && goal < 0) {
-      int pick = RandRange(0, total - 1), s = 0;
-      while (pick >= weights[s])
-        pick -= weights[s++];
-      goal = PickExitNode(s);
-      if (goal >= 0)
-        ap.goal_side = s;
-      total -= weights[s];
-      weights[s] = 0;
+    if (ap.came_from_side != kSide_None && SideLeadsSomewhere(ap.came_from_side) &&
+        !(ap.failed_sides & (1 << ap.came_from_side)))
+      order[n++] = ap.came_from_side;
+    // Of the sides with an opening, take the one leading to the screen
+    // visited least (the random order breaks ties).
+    int best_visits = 1 << 30;
+    for (int i = 0; i < n; i++) {
+      int node = PickExitNode(order[i]);
+      if (node < 0)
+        continue;
+      int x = ap.ax0 + (node % kNodeStride) * 8 + kSideDx[order[i]] * 64;
+      int y = ap.ay0 + (node / kNodeStride) * 8 + kSideDy[order[i]] * 64;
+      int screen = ScreenAt(x, y);
+      int visits = screen >= 0 ? ap.screen_visits[screen] : 0;
+      // Going back the way we came is the last resort.
+      if (order[i] == ap.came_from_side)
+        visits += 1000;
+      if (visits < best_visits) {
+        best_visits = visits;
+        goal = node;
+        ap.goal_side = order[i];
+      }
     }
   }
-  if (goal < 0 && !ap.swimming)
+  // No reachable exit from a small pocket (e.g. after a ledge jump landed
+  // somewhere unexpected): don't spend minutes circling it.
+  if (want_exit && goal < 0 && ap.queue_len < 400) {
+    if (++ap.trapped_plans >= 3) {
+      LOG("trapped in a small pocket at %d,%d, moving on", link_x_coord, link_y_coord);
+      ap.want_reset = true;
+    }
+  } else if (goal >= 0) {
+    ap.trapped_plans = 0;
+  }
+  if (goal < 0 && !ap.swimming) {
+    RunBfs(start, true);
     goal = PickWanderNode(start);
+  }
   if (goal < 0 || !BuildRoute(goal)) {
     LOG("no goal from %d,%d", link_x_coord, link_y_coord);
+    // Nowhere to wander (e.g. a narrow passage): let the next plan leave.
+    ap.wanders_in_area++;
     ap.phase = kPhase_Idle;
     ap.timer = 60;
     ap.stuck_count++;
@@ -538,11 +623,12 @@ static void Plan(bool keep_goal) {
 // Steers along the main axis and leaves small cross-axis offsets alone: the
 // game nudges Link around corners and onto stairs when he's within a few
 // pixels, and pressing sideways fights that (and stops him on stairs).
-static uint16 SteerTowards(int tx, int ty) {
+static uint16 SteerTowards(int tx, int ty, bool swimming) {
   int dx = tx - link_x_coord, dy = ty - link_y_coord;
   bool x_major = abs(dx) >= abs(dy);
-  int x_slop = x_major ? kMajorSlop : kCornerAssistSlop;
-  int y_slop = x_major ? kCornerAssistSlop : kMajorSlop;
+  int cross_slop = swimming ? kSwimCrossSlop : kCornerAssistSlop;
+  int x_slop = x_major ? kMajorSlop : cross_slop;
+  int y_slop = x_major ? cross_slop : kMajorSlop;
   uint16 b = 0;
   if (dx > x_slop) b |= kBtnRight;
   else if (dx < -x_slop) b |= kBtnLeft;
@@ -551,12 +637,27 @@ static uint16 SteerTowards(int tx, int ty) {
   return b;
 }
 
+static int ScreenAt(int x, int y) {
+  if (x < 0 || y < 0 || x >= 4096 || y >= 4096)
+    return -1;
+  return (y >> 9) * 8 + (x >> 9) + (savegame_is_darkworld ? 64 : 0);
+}
+
+static void CountVisit() {
+  int screen = ScreenAt(link_x_coord, link_y_coord);
+  if (screen >= 0 && ap.screen_visits[screen] < 255)
+    ap.screen_visits[screen]++;
+}
+
 static void OnAreaChanged() {
   LOG("area %02x -> %02x at %d,%d", ap.area, overworld_area_index, link_x_coord, link_y_coord);
   if (ap.phase == kPhase_Exit && ap.goal_side != kSide_None)
     ap.came_from_side = kOppositeSide[ap.goal_side];
   else
     ap.came_from_side = kSide_None;
+  CountVisit();
+  ap.frames_in_area = 0;
+  ap.trapped_plans = 0;
   ap.wanders_in_area = 0;
   ap.failed_sides = 0;
   ap.stuck_count = 0;
@@ -569,9 +670,46 @@ static void OnAreaChanged() {
   ap.phase = kPhase_Plan;
 }
 
+static void LearnWall(int tx, int ty) {
+  if (savegame_is_darkworld)
+    tx |= kDarkWorldTileFlag;
+  for (int i = 0; i < ap.num_learned_walls; i++)
+    if (ap.learned_walls[i].tx == tx && ap.learned_walls[i].ty == ty)
+      return;
+  int i = ap.next_learned_wall;
+  ap.learned_walls[i].tx = tx, ap.learned_walls[i].ty = ty;
+  ap.next_learned_wall = (i + 1) % kMaxLearnedWalls;
+  if (ap.num_learned_walls < kMaxLearnedWalls)
+    ap.num_learned_walls++;
+}
+
+// Stuck twice in the same spot pushing the same way: whatever is in front of
+// Link isn't passable, whatever the tile data says. Remember the two tiles
+// his leading edge is pressing into.
+static void LearnFromRepeatedStuck() {
+  bool same_spot = abs(link_x_coord - ap.last_stuck_x) <= 4 && abs(link_y_coord - ap.last_stuck_y) <= 4;
+  ap.last_stuck_x = link_x_coord, ap.last_stuck_y = link_y_coord;
+  if (!same_spot)
+    return;
+  int dx = ap.wp_x[ap.wp_pos] - link_x_coord, dy = ap.wp_y[ap.wp_pos] - link_y_coord;
+  int x = link_x_coord, y = link_y_coord;
+  if (abs(dx) >= abs(dy)) {
+    int ex = dx > 0 ? x + 16 : x - 1;  // just past the collision box (x+0..15, y+8..23)
+    LearnWall(ex >> 3, (y + 8) >> 3);
+    LearnWall(ex >> 3, (y + 23) >> 3);
+  } else {
+    int ey = dy > 0 ? y + 24 : y + 7;
+    LearnWall(x >> 3, ey >> 3);
+    LearnWall((x + 15) >> 3, ey >> 3);
+  }
+  LOG("learned a wall ahead of %d,%d", x, y);
+}
+
 static void OnStuck() {
   LOG("stuck at %d,%d heading for %d,%d (goal side %d, count %d)", link_x_coord, link_y_coord,
       ap.wp_x[ap.wp_pos], ap.wp_y[ap.wp_pos], ap.goal_side, ap.stuck_count + 1);
+  if (link_player_handler_state == kHandler_Ground)
+    LearnFromRepeatedStuck();
   ap.frames_no_closer = 0;
   if (++ap.stuck_count >= 3) {
     // This goal isn't working out. If it was an exit, don't try that side again.
@@ -674,6 +812,12 @@ uint16 Autopilot_RunFrame() {
   if (submodule_index != 0)
     return 0;
 
+  // Wandering in circles counts as progress, so also cap time per area
+  // (e.g. an island he can't leave).
+  if (++ap.frames_in_area > 60 * 180 && !ap.want_reset) {
+    LOG("in area %02x for 3 minutes, moving on", ap.area);
+    ap.want_reset = true;
+  }
   if (++ap.frames_since_progress > 60 * 90 && !ap.want_reset) {
     LOG("no progress for 90s at %d,%d", link_x_coord, link_y_coord);
     ap.want_reset = true;
@@ -701,7 +845,8 @@ uint16 Autopilot_RunFrame() {
     ap.last_handler = handler;
     if (ap.phase == kPhase_Walk || entered_water || left_water) {
       LOG("landed at %d,%d (handler %d)", link_x_coord, link_y_coord, handler);
-      Plan(!entered_water && !left_water);
+      // Without Flippers, water means "get to shore"; with them it's just terrain.
+      Plan(link_item_flippers || (!entered_water && !left_water));
     }
   }
 
@@ -730,10 +875,12 @@ uint16 Autopilot_RunFrame() {
     return ap.nudge_buttons;
 
   case kPhase_Walk: {
+    bool swimming = handler == kHandler_Swimming;
+    int arrive = swimming ? kSwimArriveDist : kArriveDist;
     // Advance past waypoints we've reached.
     while (ap.wp_pos < ap.wp_count &&
-           abs(ap.wp_x[ap.wp_pos] - link_x_coord) <= kArriveDist &&
-           abs(ap.wp_y[ap.wp_pos] - link_y_coord) <= kArriveDist) {
+           abs(ap.wp_x[ap.wp_pos] - link_x_coord) <= arrive &&
+           abs(ap.wp_y[ap.wp_pos] - link_y_coord) <= arrive) {
       ap.wp_pos++;
       ap.best_dist = 0x7fffffff;
       ap.frames_no_closer = 0;
@@ -752,12 +899,12 @@ uint16 Autopilot_RunFrame() {
       }
       return 0;
     }
-    uint16 b = SteerTowards(ap.wp_x[ap.wp_pos], ap.wp_y[ap.wp_pos]);
+    uint16 b = SteerTowards(ap.wp_x[ap.wp_pos], ap.wp_y[ap.wp_pos], swimming);
     int dist = abs(ap.wp_x[ap.wp_pos] - link_x_coord) + abs(ap.wp_y[ap.wp_pos] - link_y_coord);
     if (dist < ap.best_dist) {
       ap.best_dist = dist;
       ap.frames_no_closer = 0;
-    } else if (++ap.frames_no_closer > kStuckFrames) {
+    } else if (++ap.frames_no_closer > (swimming ? kSwimStuckFrames : kStuckFrames)) {
       OnStuck();
     }
     return b;
@@ -796,7 +943,8 @@ static void FillRect(uint8 *pixels, int pitch, int width, int height,
 // screen_x/screen_y are the world coordinates at the top-left of the frame.
 void Autopilot_DrawDebug(uint8 *pixels, int pitch, int width, int height, int scale,
                          int screen_x, int screen_y) {
-  if (!ap.grid_valid || main_module_index != 9)
+  // Skip transitions too: the grid is for the area we're leaving.
+  if (!ap.grid_valid || main_module_index != 9 || submodule_index != 0)
     return;
   for (int r = 0; r < ap.tiles; r++) {
     int sy = (ap.ay0 + r * 8 - screen_y) * scale;

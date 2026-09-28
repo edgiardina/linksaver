@@ -891,7 +891,10 @@ static int RunLinksaverHeadless(int frames, int shot_every) {
 #else
   mkdir("linksaver_test", 0755);
 #endif
-  Linksaver_Start((uint32)time(NULL));
+  // LINKSAVER_SEED=n reproduces a run; the seed is printed either way.
+  uint32 seed = getenv("LINKSAVER_SEED") ? (uint32)strtoul(getenv("LINKSAVER_SEED"), NULL, 10) : (uint32)time(NULL);
+  printf("--- seed %u\n", seed);
+  Linksaver_Start(seed);
   // LINKSAVER_PROBE=x,y,buttons:frames[,buttons:frames...] (buttons in hex):
   // place Link (x=0 keeps his position) and play the input sequence, logging
   // him each frame. For checking movement rules against the engine.

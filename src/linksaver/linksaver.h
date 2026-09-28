@@ -15,6 +15,8 @@ enum {
 typedef struct LinksaverConfig {
   bool enable_audio;
   bool no_enemies;
+  // With no_enemies: still show harmless animals and townsfolk
+  bool ambient_life;
   bool enter_buildings;
   // Reload a random start point after this many minutes (0 = never).
   uint16 reset_minutes;
@@ -35,6 +37,9 @@ extern bool g_linksaver_active;
 
 // Engine hooks, checked from sprite.c and overworld.c.
 bool Linksaver_SuppressSprites();
+// Like Linksaver_SuppressSprites, but lets harmless ambient life through
+// when that's enabled.
+bool Linksaver_SuppressSpriteType(uint8 type);
 bool Linksaver_BlockEntrances();
 
 // Called from config.c for keys in the [Linksaver] section.

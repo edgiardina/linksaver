@@ -63,6 +63,9 @@ uint8 Overworld_GetTileAttributeAtLocation(uint16 x, uint16 y) {
   return ch == '#' ? 0x01 : ch == '~' ? 0x08 : 0x00;
 }
 
+// The autopilot equips the mirror through the HUD; nothing to draw here.
+void Hud_UpdateEquippedItem() {}
+
 #include "src/linksaver/autopilot.c"
 
 static bool BodyClear(int x, int y) {
