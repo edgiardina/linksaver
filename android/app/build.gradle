@@ -1,0 +1,55 @@
+apply plugin: 'com.android.application'
+
+def sdlDir = file('../../third_party/SDL2-2.32.10')
+
+android {
+    namespace 'com.edgiardina.linksaver'
+    compileSdkVersion 34
+    ndkVersion '27.2.12479018'
+    defaultConfig {
+        applicationId 'com.edgiardina.linksaver'
+        minSdkVersion 22
+        targetSdkVersion 34
+        versionCode 1
+        versionName '1.0'
+        externalNativeBuild {
+            cmake {
+                arguments '-DANDROID_STL=c++_static', "-DSDL_DIR=${sdlDir.absolutePath.replace('\\', '/')}"
+                // The Fire TV Stick runs 32-bit only.
+                abiFilters 'armeabi-v7a', 'arm64-v8a'
+            }
+        }
+    }
+    sourceSets.main {
+        java.srcDirs += "${sdlDir}/android-project/app/src/main/java"
+        assets.srcDirs += 'build/generated/gameAssets'
+    }
+    externalNativeBuild {
+        cmake {
+            path 'CMakeLists.txt'
+            version '3.22.1'
+        }
+    }
+    buildTypes {
+        // Sideload only, so the debug key signs the release build too.
+        release {
+            signingConfig signingConfigs.debug
+            minifyEnabled false
+        }
+    }
+    lint { abortOnError false }
+}
+
+// The game data comes from the user's ROM. It goes in the APK but never in git.
+task copyGameAssets(type: Copy) {
+    from('../..') { include 'zelda3_assets.dat' }
+    from('.') { include 'linksaver_tv.ini' }
+    from('../..') { include 'saves/ref/*.sav' }
+    into 'build/generated/gameAssets'
+    rename 'linksaver_tv.ini', 'zelda3.ini'
+    doFirst {
+        if (!file('../../zelda3_assets.dat').exists())
+            throw new GradleException('zelda3_assets.dat not found. Run extract_assets.bat first.')
+    }
+}
+preBuild.dependsOn copyGameAssets

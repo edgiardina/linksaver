@@ -64,7 +64,15 @@ void dma_reset(Dma* dma) {
 }
 
 void dma_saveload(Dma *dma, SaveLoadFunc *func, void *ctx) {
-  func(ctx, &dma->channel, sizeof(Dma) - offsetof(Dma, channel));
+  // Saves hold 192 bytes here, the size on 64-bit builds. 32-bit builds have less
+  // tail padding, so read or write the difference to keep the save lined up.
+  enum { kDmaSaveSize = 192 };
+  size_t size = sizeof(Dma) - offsetof(Dma, channel);
+  func(ctx, &dma->channel, size);
+  if (size < kDmaSaveSize) {
+    uint8_t padding[8] = { 0 };
+    func(ctx, padding, kDmaSaveSize - size);
+  }
 }
 
 uint8_t dma_read(Dma* dma, uint16_t adr) {

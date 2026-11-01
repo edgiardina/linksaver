@@ -48,6 +48,22 @@ machines and don't publish it.
 
 To watch without installing: `linksaver.exe --linksaver` runs it in a window.
 
+## Fire TV
+
+Linksaver also runs as an Android app on a Fire TV Stick with Fire OS. The app is not a system screensaver. You start it from the apps list. Press any button on the remote to stop it. Fire TV devices with Vega OS cannot use this build.
+
+To build and install:
+
+1. Do steps 1 and 2 of Getting started to make `zelda3_assets.dat`.
+2. Download the [SDL2 2.32.10 source](https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz) and extract it into `third_party\`.
+3. Install NDK 27.2.12479018 and CMake 3.22.1 with the Android SDK manager. Use JDK 17 for the build.
+4. In the `android` folder, run `gradlew assembleRelease`.
+5. Run `adb connect <stick address>:5555`, then `adb install -r app\build\outputs\apk\release\app-release.apk`.
+
+The settings are in `android\app\linksaver_tv.ini`. Rebuild and reinstall to change them. If the app is already on the stick, clear its data first, because the app keeps its first copy of this file.
+
+The APK contains data from your ROM. Keep it on your own devices and do not publish it.
+
 ## Settings
 
 The Settings dialog covers:

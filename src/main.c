@@ -283,7 +283,9 @@ static const struct RendererFuncs kSdlRendererFuncs  = {
 
 void OpenGLRenderer_Create(struct RendererFuncs *funcs, bool use_opengl_es);
 
+#ifndef __ANDROID__
 #undef main
+#endif
 int main(int argc, char** argv) {
   argc--, argv++;
   int scr_args_used = Screensaver_ParseArgs(argc, argv);

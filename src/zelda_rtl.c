@@ -775,7 +775,7 @@ void ZeldaSetLanguage(const char *language) {
 }
 
 
-static const char *const kReferenceSaves[] = {
+const char *const kReferenceSaves[] = {
   "Chapter 1 - Zelda's Rescue.sav",
   "Chapter 2 - After Eastern Palace.sav",
   "Chapter 3 - After Desert Palace.sav",
