@@ -38,3 +38,10 @@ __pycache__
 /shots_*/
 /linksaver_test.log
 /dist/
+
+/android/.gradle/
+/android/build/
+/android/app/build/
+/android/app/.cxx/
+/android/local.properties
+/third_party/SDL2-*/

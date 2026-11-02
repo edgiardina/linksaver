@@ -16,6 +16,7 @@
 #define strcasecmp _stricmp
 #else
 #include <strings.h>
+#include <unistd.h>
 #endif
 
 ScreensaverMode g_scr_mode;
@@ -61,6 +62,11 @@ static void BecomeDpiAware() {
 #endif
 
 int Screensaver_ParseArgs(int argc, char **argv) {
+#ifdef __ANDROID__
+  // Android has no command line: the app is always the screensaver.
+  g_scr_mode = kScrMode_Fullscreen;
+  return 0;
+#endif
   int used = ParseArgsInner(argc, argv);
 #ifdef _WIN32
   if (g_scr_mode != kScrMode_None)
@@ -111,10 +117,49 @@ static int ParseArgsInner(int argc, char **argv) {
   return 0;
 }
 
+#ifdef __ANDROID__
+#include <sys/stat.h>
+enum { kNumRefSaves = 13 };
+extern const char *const kReferenceSaves[];
+
+// Copies a file packed in the APK to the working directory on first run, so the
+// plain fopen() calls in the game can read it.
+static void CopyApkAsset(const char *name) {
+  FILE *f = fopen(name, "rb");
+  if (f) {
+    fclose(f);
+    return;
+  }
+  size_t size = 0;
+  void *data = SDL_LoadFile(name, &size);
+  if (!data)
+    return;
+  f = fopen(name, "wb");
+  if (f) {
+    fwrite(data, 1, size, f);
+    fclose(f);
+  }
+  SDL_free(data);
+}
+#endif
+
 // Windows runs screensavers with the working directory set to System32, but
 // our assets and ini live next to the executable.
 void Screensaver_ChdirToExe() {
-#ifdef _WIN32
+#ifdef __ANDROID__
+  const char *dir = SDL_AndroidGetInternalStoragePath();
+  if (dir && chdir(dir) == 0) {
+    CopyApkAsset("zelda3_assets.dat");
+    CopyApkAsset("zelda3.ini");
+    mkdir("saves", 0755);
+    mkdir("saves/ref", 0755);
+    for (int i = 0; i < kNumRefSaves; i++) {
+      char name[128];
+      snprintf(name, sizeof(name), "saves/ref/%s", kReferenceSaves[i]);
+      CopyApkAsset(name);
+    }
+  }
+#elif defined(_WIN32)
   char path[MAX_PATH];
   DWORD n = GetModuleFileNameA(NULL, path, sizeof(path));
   if (n == 0 || n >= sizeof(path))
